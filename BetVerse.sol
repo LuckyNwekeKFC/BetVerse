@@ -2,8 +2,29 @@
 pragma solidity ^0.8.2;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
+import "@chainlink/contracts/src/v0.8/ChainlinkClient.sol";
 
-contract BetVerse is Ownable {
+
+contract Bet2 is Ownable,ChainlinkClient {
+
+    using Chainlink for Chainlink.Request;
+
+    string public LastGameRequestResult;
+    uint8 public LastGameRequestID;
+    string public LastGameRequestTitle;
+    
+    address private oracle;
+    bytes32 private jobId;
+    uint256 private fee;
+
+    /**
+    Sportsmonk API Details
+    Payment Amount: 0.1 LINK
+    LINK Token Address: 0xa36085F69e2889c224210F603D836748e7dC0088
+    Oracle Address: 0xfF07C97631Ff3bAb5e5e5660Cdf47AdEd8D4d4Fd
+    JobID: 491c282eb8b7451699855992d686a20b
+     */
+
 
     uint256 minimumBetAmount;
     uint8 gamesCounter;
@@ -12,30 +33,45 @@ contract BetVerse is Ownable {
 
     struct Game {
         uint8 id;
+        string seasonID;
+        string matchRound;
         string title;
         bool active;
         uint256 prizePool;
         string outcome;
     }
 
+    event Recieved(string tet,bytes32 data);
+
     mapping (uint8 => Game) games;
     mapping (uint8 => address payable[]) gameKeys;
     mapping (uint8 => mapping(address => string)) gameStakes;
     
     constructor() {
+
+        setPublicChainlinkToken();
+        oracle = 0xfF07C97631Ff3bAb5e5e5660Cdf47AdEd8D4d4Fd;
+        jobId = "491c282eb8b7451699855992d686a20b";
+        fee = 0.1 * 10 ** 18;
+
         gamesCounter = 0;
         dealerBalance = 0 ether;
-        minimumBetAmount = 1 ether;
+        // minimumBetAmount = 1 ether;
+        minimumBetAmount = 0.1 ether;
         self = address(this);
     }
 
-    function createGame(string memory title) public onlyOwner returns (uint8) {
+    function createGame(string memory title,string memory seasonID, string memory matchRound) public onlyOwner returns (uint8) {
+
+        //matchround can  be final,match 4, match 1, etc, while season id can be gotten from the api call
         gamesCounter += 1;
 
         uint8 gameID = gamesCounter;
 
         games[gameID] = Game({
             id: gameID,
+            seasonID: seasonID,
+            matchRound: matchRound,
             title: title, 
             active: true,
             prizePool: 0 ether,
@@ -114,7 +150,50 @@ contract BetVerse is Ownable {
         gamesCounter -= 1;
     }
 
-    function updateGame(uint8 gameID,string memory title, string memory outcome) public onlyOwner {
+    function getGameData(uint8 gameID) public onlyOwner returns (bytes32 requestId){
+        require(games[gameID].id > 0, "Game does not exist!");
+        // set game to inactive, using the fixture ID perform a request to the API and then call distributePrizes
+
+        Chainlink.Request memory request = buildChainlinkRequest(jobId, address(this), this.fulfill.selector);
+            request.add("endpoint", "match-results");
+
+            request.add("round",  games[gameID].matchRound);
+
+            request.add("season_id", games[gameID].seasonID);
+
+            LastGameRequestID = games[gameID].id;
+            LastGameRequestTitle = games[gameID].title;
+
+
+        return sendChainlinkRequestTo(oracle, request, fee);
+
+    }
+
+    function fulfill(bytes32 _requestId, bytes32 _gamedata) public recordChainlinkFulfillment(_requestId)
+    {
+    
+        emit Recieved('match winner: ',_gamedata);
+
+        LastGameRequestResult = bytes32ToString(_gamedata);
+
+        updateGame(LastGameRequestID,LastGameRequestTitle,LastGameRequestResult);
+
+    }
+
+    function bytes32ToString(bytes32 _bytes32) public pure returns (string memory) {
+        uint8 i = 0;
+        while(i < 32 && _bytes32[i] != 0) {
+            i++;
+        }
+        bytes memory bytesArray = new bytes(i);
+        for (i = 0; i < 32 && _bytes32[i] != 0; i++) {
+            bytesArray[i] = _bytes32[i];
+        }
+        
+        return string(bytesArray);
+    }
+
+    function updateGame(uint8 gameID,string memory title, string memory outcome) public {
         require(games[gameID].id > 0, "Game does not exist!");
 
         games[gameID].title = keccak256(abi.encodePacked(title)) != keccak256(abi.encodePacked("")) ? title : games[gameID].title;
@@ -131,10 +210,11 @@ contract BetVerse is Ownable {
         }
     }
 
-    function enterGame(uint8 gameID, address payable userWallet, string memory option ) public payable {
+    function enterGame(uint8 gameID,address payable userWallet, string memory option ) public payable {
         require(msg.value == minimumBetAmount, "Minimum of 1 ETH is required to enter this game!");
         require(games[gameID].id > 0, "Game does not exist!");
         require(games[gameID].active, "Game no longer available!");
+
 
         //dealer gets 10% of this stake/bet
         dealerBalance += (msg.value * 10) / 100;
@@ -150,8 +230,9 @@ contract BetVerse is Ownable {
         gameKeys[gameID][keysLength] = userWallet;
     }
 
-    function distributePrizes(uint8 gameID) public onlyOwner{
+    function distributePrizes(uint8 gameID) public {
         Game memory game = games[gameID];
+        //removed the onlyowner modifier to enable it to be called directly when the API returns instead of waiting for the owner to approve
 
         require(game.id > 0, "Game does not exist!");
         require(!game.active, "Can't distribute prize pool of an active game!");
