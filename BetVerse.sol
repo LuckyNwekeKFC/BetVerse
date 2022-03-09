@@ -12,6 +12,7 @@ contract Bet2 is Ownable,ChainlinkClient {
     string public LastGameRequestResult;
     uint8 public LastGameRequestID;
     string public LastGameRequestTitle;
+    bytes32 public gamedata;
     
     address private oracle;
     bytes32 private jobId;
@@ -41,7 +42,6 @@ contract Bet2 is Ownable,ChainlinkClient {
         string outcome;
     }
 
-    event Recieved(string tet,bytes32 data);
 
     mapping (uint8 => Game) games;
     mapping (uint8 => address payable[]) gameKeys;
@@ -171,16 +171,15 @@ contract Bet2 is Ownable,ChainlinkClient {
 
     function fulfill(bytes32 _requestId, bytes32 _gamedata) public recordChainlinkFulfillment(_requestId)
     {
-    
-        emit Recieved('match winner: ',_gamedata);
+            gamedata = _gamedata;
 
-        LastGameRequestResult = bytes32ToString(_gamedata);
+            LastGameRequestResult = bytes32ToString(_gamedata);
 
         updateGame(LastGameRequestID,LastGameRequestTitle,LastGameRequestResult);
 
     }
 
-    function bytes32ToString(bytes32 _bytes32) public pure returns (string memory) {
+    function bytes32ToString(bytes32 _bytes32) private pure returns (string memory) {
         uint8 i = 0;
         while(i < 32 && _bytes32[i] != 0) {
             i++;
